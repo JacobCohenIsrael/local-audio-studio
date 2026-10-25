@@ -16,6 +16,11 @@ Run GPU work sequentially with a 300-second deadline and an owned cancellable
 worker process. Do not retry failed inference automatically. Stop only processes
 owned by this project. Launch background helpers hidden on Windows.
 Do not change drivers, hardware settings, other services or global configurations.
+The owner subsequently requested MCP support for other projects and sessions.
+The scoped audio MCP client registration may add only its own entry; preserve
+all unrelated client settings. Browser and MCP jobs share the same bounded queue.
+Prefer a TTS batch for multiple lines; one model load and one 300-second deadline
+cover the whole batch. Never start a separate GPU worker for each MCP connection.
 
 Use Chatterbox's reference-conditioned voice conversion, not pitch shifting as a
 substitute. Keep clean and radio audio separately. Preserve the upstream Perth

@@ -6,29 +6,50 @@ import os
 import secrets
 import threading
 import time
+import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 import gradio as gr
 from fastapi import FastAPI, Header, HTTPException
 import uvicorn
-from studio import VOICE_CHOICES, run_job, stop_active
+from studio import VOICE_CHOICES, stop_active
 from voice_profiles import CUSTOM_VOICE, PROFILES
 from delivery import TONE_CHOICES
 from recorder import recorder
+from jobs import JobManager
+from mcp_api import create_mcp
 
 PORT = int(os.environ.get("LOCAL_AUDIO_PORT", "7865"))
-app = FastAPI()
+jobs = JobManager()
+mcp, mcp_transport = create_mcp(jobs)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    jobs.start()
+    try:
+        async with mcp.session_manager.run():
+            yield
+    finally:
+        await asyncio.to_thread(jobs.close)
+
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/agent",mcp_transport)
 STOP_TOKEN = secrets.token_urlsafe(32)
 
 @app.get("/healthz")
 def health():
     from studio import inference_running
     return {"recording_active":recorder.snapshot()["recording"], "inference_running":inference_running(), "service":"local-audio-studio","status":"ready","pid":os.getpid(),
+        "mcp":True,"project_root":str(ROOT),"queue":jobs.stats(),
         "note":"Inference runs in a separate worker; readiness is not a generation test."}
 
 @app.post("/local/stop")
 def shutdown(x_local_audio_token: str = Header(default="")):
     if not secrets.compare_digest(x_local_audio_token, STOP_TOKEN):
         raise HTTPException(status_code=403)
+    jobs.close(wait=False)
     stop_active()
     if recorder.stream is not None:
         recorder.stop()
@@ -85,7 +106,9 @@ def create(mode, source, voice, custom, text, preset, static, seed, progress=gr.
     progress(0.05, desc="Preparing your recording")
     try:
         progress(0.1, desc="Converting on your GPU. You can cancel below.")
-        job, result = run_job(mode, source, voice, custom, text, preset, static, seed, tone=tone)
+        ticket = jobs.submit(mode,source=source,voice=voice,custom=custom,text=text,preset=preset,static=static,seed=int(seed),tone=tone)
+        progress(0.15, desc="Waiting in the shared audio queue")
+        job, result = jobs.wait_finished(ticket["job_id"])
         progress(1, desc="Ready to compare")
         status = (f"Saved {job.name} · {result['seconds']:.1f} seconds of audio · "
                   f"{result['inference_seconds']:.1f} seconds to load and generate. "

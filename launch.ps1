@@ -20,7 +20,7 @@ if ($Stop) {
     exit 0
 }
 $health = Get-AudioHealth
-if ($health -and $health.service -ne 'local-audio-studio') { throw 'Port 7865 belongs to another service.' }
+if ($health -and ($health.service -ne 'local-audio-studio' -or ($health.project_root -and $health.project_root -ne $PSScriptRoot))) { throw 'Port 7865 belongs to another service or checkout.' }
 if (-not $health) {
     $python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $python)) { throw 'Run Setup Audio.cmd first.' }

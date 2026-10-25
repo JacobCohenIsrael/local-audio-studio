@@ -8,6 +8,11 @@ and reference recordings retain their own licenses; see
 [third-party notices](THIRD_PARTY_NOTICES.md). Downloads, personal recordings and
 generated audio are not included in this repository.
 
+**Agent access:** [MCP connection and tool guide](MCP.md) — shared local queue,
+asynchronous jobs, TTS batches, voice conversion and CPU radio effects. Run
+`.venv/Scripts/python.exe connect_mcp.py --install-user` after setup to make it
+available to other local Codex projects and sessions.
+
 ## Start and use
 
 Double-click **Start Audio.cmd**. The local app opens at http://127.0.0.1:7865.
@@ -35,8 +40,9 @@ Use **Stop Audio.cmd** to close only this project's service and active worker.
 
 The source performance is limited to 30 seconds for this first experiment.
 There is one GPU job at a time, a five-minute deadline, and a Cancel button.
-Each job loads a new worker; its GPU memory is released when it finishes.
-Model loading adds overhead to every request.
+Browser and MCP requests share a bounded queue. Each GPU job loads a new worker;
+its GPU memory is released when it finishes. MCP speech batches reuse that load
+for several lines. Single requests still pay model-loading overhead.
 
 **Text to speech** generates new English dialogue using the selected target
 reference. It is limited to 300 characters initially. The radio settings selected

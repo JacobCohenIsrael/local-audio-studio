@@ -4,6 +4,7 @@ configure(offline=True)
 import gc
 import json
 import math
+import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
+from filelock import FileLock
 from effects import PRESETS, mono_audio, safe_level
 from voice_profiles import VOICE_CHOICES, CUSTOM_VOICE, get_profile, voice_path
 from delivery import prepare_delivery
@@ -24,6 +26,10 @@ _job_lock = threading.Lock()
 _process_lock = threading.Lock()
 _active_process = None
 _cancelled = threading.Event()
+
+
+def new_job_id():
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
 
 def load_audio(path, maximum=30, minimum=0.5):
     if not path or not Path(path).is_file():
@@ -81,13 +87,20 @@ def wait_owned(process, timeout=300):
         raise RuntimeError("Cancelled. Inputs and logs were retained.")
     return process.returncode
 
-def run_job(mode, source, voice, custom, text="", preset="Radio", static=0.3, seed=42, tone="Natural"):
-    global _active_process
+def run_job(mode, source, voice, custom, text="", preset="Radio", static=0.3, seed=42, tone="Natural", *,
+            texts=None, job_id=None, cancel_event=None, reference_override=None):
+    global _active_process, _cancelled
     if not _job_lock.acquire(blocking=False):
         raise RuntimeError("An audio job is already running. Wait or cancel it first.")
     job = None
+    gpu_lock = FileLock(ROOT / "work" / "gpu.lock")
+    gpu_acquired = False
     try:
-        _cancelled.clear()
+        gpu_lock.acquire(timeout=0)
+        gpu_acquired = True
+        _cancelled = cancel_event if cancel_event is not None else threading.Event()
+        if _cancelled.is_set():
+            raise RuntimeError("Cancelled before inference.")
         if mode not in ("convert", "tts") or preset not in PRESETS:
             raise ValueError("Invalid audio mode or radio preset.")
         seed = int(seed)
@@ -97,7 +110,15 @@ def run_job(mode, source, voice, custom, text="", preset="Radio", static=0.3, se
         delivery = None
         if mode == "tts":
             text, delivery = prepare_delivery(text, tone)
-        reference = choose_reference(voice, custom)
+        items = None
+        if texts is not None:
+            if mode != "tts" or not 1 <= len(texts) <= 8 or sum(len(t) for t in texts) > 1200:
+                raise ValueError("A speech batch needs 1–8 lines, at most 1200 characters total.")
+            items = []
+            for index, line in enumerate(texts):
+                spoken, controls = prepare_delivery(line, tone)
+                items.append({"text":spoken,"original_text":line,"delivery":controls,"seed":(seed+index) % 2147483648})
+        reference = Path(reference_override) if reference_override is not None else choose_reference(voice, custom)
         try:
             load_audio(reference, maximum=30, minimum=3)
         except ValueError as exc:
@@ -107,13 +128,18 @@ def run_job(mode, source, voice, custom, text="", preset="Radio", static=0.3, se
         for name in (["s3gen.safetensors"] if mode == "convert" else ["s3gen.safetensors", "t3_cfg.safetensors", "ve.safetensors", "tokenizer.json"]):
             if not (ROOT / "models" / "chatterbox" / name).is_file():
                 raise RuntimeError("A required model is missing. Run Setup Audio.cmd.")
-        job = ROOT / "outputs" / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8])
+        job_id = job_id or new_job_id()
+        if not re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", job_id):
+            raise ValueError("Invalid job ID.")
+        job = ROOT / "outputs" / job_id
         job.mkdir(parents=True)
         config = {"mode":mode, "voice":voice, "text":text.strip(), "radio_preset":preset,
             "static_percent":float(static), "seed":seed, "max_source_seconds":30, "reference_seconds_used":10,
             "chatterbox_revision":"5de7a54aa4e5e2baadb0182dde554908b48b85c2"}
         if delivery is not None:
             config.update({"original_text":original_text,"delivery":delivery})
+        if items is not None:
+            config["items"] = items
         profile = get_profile(voice)
         if profile is not None:
             config["voice_profile"] = profile
@@ -157,6 +183,8 @@ def run_job(mode, source, voice, custom, text="", preset="Radio", static=0.3, se
                 _active_process.kill()
                 _active_process.wait(timeout=15)
             _active_process = None
+        if gpu_acquired:
+            gpu_lock.release()
         _job_lock.release()
 
 
