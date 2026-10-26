@@ -18,6 +18,7 @@ from delivery import TONE_CHOICES
 from recorder import recorder
 from jobs import JobManager
 from mcp_api import create_mcp
+from sound_effects import EFFECTS
 
 PORT = int(os.environ.get("LOCAL_AUDIO_PORT", "7865"))
 jobs = JobManager()
@@ -123,6 +124,47 @@ def convert(source, voice, custom, preset, static, seed, progress=gr.Progress())
 def speak(text, voice, custom, preset, static, seed, tone="Natural", progress=gr.Progress()):
     return create("tts",None,voice,custom,text,preset,static,seed,progress,tone=tone)
 
+
+def create_sound_effects(selected, duration, intensity, variations, seed):
+    try:
+        if not selected or any(effect not in EFFECTS for effect in selected):
+            raise ValueError("Select at least one effect.")
+        if int(variations) != variations or not 1 <= variations <= 5:
+            raise ValueError("Choose 1–5 variations per effect.")
+        if int(seed) != seed:
+            raise ValueError("Variation seed must be a whole number.")
+        items = [dict(effect=effect, duration=duration, intensity=intensity,
+                      seed=(int(seed) + index) % 2147483648)
+                 for effect in selected for index in range(int(variations))]
+        if not 0 <= seed <= 2147483647:
+            raise ValueError("Seed must be 0–2147483647.")
+        ticket = jobs.submit("sfx", effects=items)
+        job_id = ticket["job_id"]
+        yield None, [], None, "Queued. You can cancel this batch below.", job_id, gr.update(choices=[], value=None)
+        job, result = jobs.wait_finished(job_id)
+        files = [str(job / item["file"]) for item in result["items"]]
+        yield files[0], files, str(job / "sound-effects.zip"), (
+            f"Saved {len(files)} effects · mono 48 kHz / 24-bit WAV. "
+            "Play the preview or download individual files. Listen before accepting quality."), job_id, gr.update(
+                choices=[(Path(path).name, path) for path in files], value=files[0])
+    except Exception as exc:
+        raise gr.Error(str(exc)) from exc
+
+
+def cancel_sound_effects(job_id):
+    if not job_id:
+        return "No sound-effects batch selected."
+    state = jobs.cancel(job_id)
+    return f"Batch {job_id}: {state['status']}. Cancellation requested if still running."
+
+
+def preview_sound_effect(selection):
+    if not selection:
+        return None
+    path = Path(selection).resolve()
+    path.relative_to((ROOT / "outputs").resolve())
+    return str(path)
+
 def quality_samples():
     try:
         report = json.loads((ROOT / "work" / "quality-check.json").read_text(encoding="utf-8"))
@@ -151,7 +193,7 @@ def recording_comparison():
 
 
 with gr.Blocks(title="Local Audio Studio") as demo:
-    gr.Markdown("# Local Audio Studio\nRecord a performance, choose a voice, and compare clean speech with a radio version. Everything runs on this PC.")
+    gr.Markdown("# Local Audio Studio\nCreate voices, radio dialogue and game sound effects. Everything runs on this PC.")
     with gr.Tabs():
         with gr.Tab("Record & change voice"):
             with gr.Row():
@@ -234,6 +276,32 @@ with gr.Blocks(title="Local Audio Studio") as demo:
                 api_name="speak",concurrency_id="audio",concurrency_limit=1)
             tc.click(stop_active,outputs=ts,queue=False,api_name=False)
             gr.Markdown("This initial text-to-speech setup uses the English Chatterbox checkpoint.")
+        with gr.Tab("Sound effects"):
+            gr.Markdown("Create stylized explosions, lasers and plasma weapons. Choose several effects to export a batch. No model download is needed.")
+            sfx_types = gr.Dropdown(list(EFFECTS), value=list(EFFECTS), multiselect=True, label="Effects")
+            with gr.Row():
+                sfx_duration = gr.Slider(.15, 8, value=2, step=.05, label="Duration per file (seconds)")
+                sfx_intensity = gr.Slider(0, 1, value=.7, step=.05, label="Intensity · weight and distortion")
+            with gr.Row():
+                sfx_variations = gr.Slider(1, 5, value=2, step=1, label="Variations per effect")
+                sfx_seed = gr.Number(value=42, precision=0, label="Variation seed · repeat settings for the same sound")
+            with gr.Row():
+                sfx_generate = gr.Button("Generate sound effects", variant="primary")
+                sfx_cancel = gr.Button("Cancel this batch")
+            sfx_job = gr.State(None)
+            sfx_selection = gr.Dropdown(choices=[], label="Choose a generated effect to preview")
+            sfx_preview = gr.Audio(buttons=["download"], label="Listen to selected effect", type="filepath", interactive=False)
+            sfx_files = gr.File(file_count="multiple", label="Download individual WAVs", interactive=False)
+            sfx_zip = gr.File(label="Download batch WAVs and settings")
+            sfx_status = gr.Textbox(label="Status", interactive=False)
+            sfx_generate.click(create_sound_effects,
+                [sfx_types,sfx_duration,sfx_intensity,sfx_variations,sfx_seed],
+                [sfx_preview,sfx_files,sfx_zip,sfx_status,sfx_job,sfx_selection], api_name="sound_effects",
+                concurrency_id="audio", concurrency_limit=1)
+            sfx_cancel.click(cancel_sound_effects, inputs=sfx_job, outputs=sfx_status, queue=False, api_name=False)
+
+            sfx_selection.change(preview_sound_effect, inputs=sfx_selection, outputs=sfx_preview, queue=False, api_name=False)
+            gr.Markdown("Each WAV contains one complete effect, including its tail within the chosen duration. Plasma includes a short charge-up. These are procedural game sounds; listen to judge whether they suit your game.")
         with gr.Tab("Your voice comparison"):
             personal_note = gr.Markdown()
             personal_source = gr.Audio(buttons=["download"],label="Your original recording",interactive=False)

@@ -14,6 +14,7 @@ import studio
 from delivery import prepare_delivery
 from effects import PRESETS, radio_effect, safe_level
 from runtime import ROOT
+from sound_effects import validate as validate_sfx, render_batch
 
 TERMINAL = {"complete", "failed", "cancelled", "interrupted"}
 JOB_ID = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
@@ -79,8 +80,8 @@ class JobManager:
                 "queued":sum(r["status"]=="queued" for r in pending), "closed":self.closed}
 
     def submit(self, mode, *, source=None, voice="American male 2 · RMS", custom=None, text="", texts=None,
-               preset="Radio", static=0.3, seed=42, tone="Natural", request_id=None):
-        if mode not in {"tts", "convert", "radio"} or preset not in PRESETS:
+               preset="Radio", static=0.3, seed=42, tone="Natural", request_id=None, effects=None):
+        if mode not in {"tts", "convert", "radio", "sfx"} or preset not in PRESETS:
             raise ValueError("Choose a supported audio mode and radio preset.")
         if not isinstance(seed,int) or isinstance(seed,bool) or not 0 <= seed <= 2147483647 or not 0 <= float(static) <= 2:
             raise ValueError("Seed must be 0–2147483647 and static 0–2 percent.")
@@ -94,12 +95,18 @@ class JobManager:
             text = texts[0]
         if mode=="tts":
             prepare_delivery(text,tone)
+        if mode=="sfx":
+            effects = validate_sfx(effects)
+        elif effects is not None:
+            raise ValueError("Effects are only supported in sound-effects mode.")
         reference = None
-        if mode!="radio":
+        if mode in {"tts", "convert"}:
             reference = local_audio(studio.choose_reference(voice,custom),reference=True)
-        source = local_audio(source,maximum=90 if mode=="radio" else 30) if mode!="tts" else None
+        source = local_audio(source,maximum=90 if mode=="radio" else 30) if mode in {"radio", "convert"} else None
         payload = {"mode":mode,"voice":voice,"text":text,"texts":texts,"preset":preset,
             "static":float(static),"seed":seed,"tone":tone}
+        if mode=="sfx":
+            payload = {"mode":mode,"effects":effects}
         hashes = {"source":digest(source) if source else None,"reference":digest(reference) if reference else None}
         fingerprint = hashlib.sha256(json.dumps({**payload,"source_sha256":hashes["source"],
             "reference_sha256":hashes["reference"]},sort_keys=True).encode()).hexdigest()
@@ -132,6 +139,9 @@ class JobManager:
             payload["custom"] = str(staging / ("reference"+reference.suffix.lower())) if custom and reference else None
             record = {"job_id":job_id,"status":"queued","mode":mode,"created_at":now(),"request_id":request_id,
                 "fingerprint":fingerprint,"payload":payload,"line_count":len(texts) if texts else 1}
+            if mode=="sfx":
+                record.pop("line_count")
+                record["effect_count"] = len(effects)
             self._save(record)
             self.records[job_id] = record
             self.events[job_id] = threading.Event()
@@ -165,6 +175,8 @@ class JobManager:
 
     def _execute(self, record, event):
         p = record["payload"]
+        if p["mode"]=="sfx":
+            return render_batch(self.root / "outputs" / record["job_id"], p["effects"], event)
         if p["mode"]=="radio":
             if event.is_set():
                 raise RuntimeError("Cancelled.")
@@ -199,7 +211,8 @@ class JobManager:
         job = self.root / "outputs" / record["job_id"]
         result["artifacts"] = [{"name":p.name,"path":str(p.resolve()),"uri":p.resolve().as_uri(),"bytes":p.stat().st_size}
             for p in sorted(job.glob("*")) if p.is_file() and
-            (p.name in {"clean.wav","radio.wav","comparison.zip"} or re.fullmatch(r"item-\d{3}-(clean|radio)\.wav",p.name))]
+            (p.name in {"clean.wav","radio.wav","comparison.zip","sound-effects.zip"} or
+             re.fullmatch(r"(?:item-\d{3}-(?:clean|radio)|sfx-\d{3}-(?:explosion|laser|plasma))\.wav",p.name))]
         return result
 
     def get(self, job_id, wait_seconds=0):

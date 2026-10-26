@@ -53,7 +53,7 @@ def test_mcp_lists_tools_and_status_without_gpu_work(client):
     response = rpc(c,"tools/list")
     assert response.status_code==200,response.text
     tools = response.json()["result"]["tools"]
-    assert {t["name"] for t in tools}=={"audio_service_status","list_audio_voices","generate_speech","generate_speech_batch","convert_voice","apply_radio_effect","get_audio_job","cancel_audio_job"}
+    assert {t["name"] for t in tools}=={"audio_service_status","list_audio_voices","generate_speech","generate_speech_batch","convert_voice","apply_radio_effect","get_audio_job","cancel_audio_job","generate_sound_effects"}
     status = call(c,"audio_service_status")["structuredContent"]
     assert status["queue"]["outstanding"]==0
     assert status["gpu_deadline_seconds"]==300
@@ -79,3 +79,17 @@ def test_mcp_rejects_bad_requests_before_creating_jobs(client):
     assert call(c,"generate_speech",{"text":"Hello","voice_id":"cmu-bdl"})["isError"]
     assert call(c,"get_audio_job",{"job_id":"../server.json"})["isError"]
     assert jobs.stats()["outstanding"]==0
+
+
+def test_mcp_sound_effects_batch_round_trip(client):
+    c,jobs = client
+    submitted = call(c,"generate_sound_effects",{"effects":[
+        {"effect":"explosion","duration":.25}, {"effect":"laser","duration":.25},
+        {"effect":"plasma","duration":.25}], "request_id":"mcp-sfx-batch-test"})
+    assert not submitted.get("isError"), submitted
+    ticket = submitted["structuredContent"]
+    state = call(c,"get_audio_job",{"job_id":ticket["job_id"],"wait_seconds":5})["structuredContent"]
+    assert state["status"] == "complete", state
+    assert len(state["artifacts"]) == 4
+    assert state["result"]["gpu_used"] is False
+    assert call(c,"generate_sound_effects",{"effects":[{"effect":"laser","duration":10}]})["isError"]

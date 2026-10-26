@@ -11,6 +11,8 @@ Listen to the clean and radio versions side by side, then download your favorite
 - **Make dialogue from text.** Generate English speech with a choice of voices
   and tone presets.
 - **Add a radio effect.** Keep both the clean speech and the processed version.
+- **Make game sound effects.** Create explosions, lasers and plasma weapons with
+  duration, intensity and seeded variations. Preview each WAV or download a batch ZIP.
 - **Connect an agent.** Use the same local studio from other projects through
   [MCP](MCP.md).
 
@@ -45,6 +47,15 @@ Use **Stop Audio.cmd** when you're done.
 The studio processes one GPU job at a time. Model loading can take a little
 while; each job has a five-minute limit and can be cancelled.
 Your original recording and each job's results are saved separately.
+
+**Sound effects:** Open **Sound effects**, select one or more types, set duration
+and intensity, and choose 1–5 variations per type. Click **Generate sound effects**.
+Choose a generated effect in the preview selector, or download the entire batch. These are
+procedural, stylized game sounds generated on the CPU, with no extra models or
+downloads. Exports are mono 48 kHz, 24-bit WAV, with a separate file for each effect.
+Their tails fit within the selected 0.15–8 second duration. Plasma includes a
+short charge-up. Judge suitability by listening; cinematic realism is not promised.
+The app and MCP share the same queue; **Cancel this batch** cancels only that batch.
 
 **Prefer to type?** Open **Text to speech**, enter up to 300 characters, and
 choose a voice. **American male RMS** or **American female SLT** with **Natural**

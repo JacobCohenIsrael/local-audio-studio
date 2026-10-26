@@ -7,6 +7,7 @@ from mcp.types import ToolAnnotations
 from voice_profiles import PROFILES, CUSTOM_VOICE, voice_path
 from delivery import TONE_CHOICES
 from effects import PRESETS
+from sound_effects import EFFECTS
 from mcp_connection import read_token
 
 INSTRUCTIONS = (
@@ -15,6 +16,7 @@ INSTRUCTIONS = (
     "GPU workers stop after 300 seconds. Pass a unique request_id and reuse it only for the same request. "
     "Never automatically retry failed/interrupted jobs. Outputs are local files; listen before claiming quality. "
     "Microphone capture stays in the browser UI."
+    " Use generate_sound_effects for a CPU batch of explosions, lasers or plasma weapons; no model download."
 )
 
 
@@ -35,7 +37,7 @@ class BearerAuth:
 
 
 def create_mcp(jobs, token=None):
-    server = MCPServer("Local Audio Studio",version="1.0.0",instructions=INSTRUCTIONS)
+    server = MCPServer("Local Audio Studio",version="1.1.0",instructions=INSTRUCTIONS)
     read_only = ToolAnnotations(readOnlyHint=True,destructiveHint=False,openWorldHint=False)
     writes = ToolAnnotations(readOnlyHint=False,destructiveHint=False,openWorldHint=False)
 
@@ -57,6 +59,8 @@ def create_mcp(jobs, token=None):
         return {"service":"local-audio-studio","queue":jobs.stats(),"gpu_deadline_seconds":300,
             "max_batch_lines":8,"max_batch_characters":1200,"source_seconds":[0.5,30],
             "reference_seconds":[3,30],"tones":TONE_CHOICES,"radio_presets":list(PRESETS),
+            "sound_effects":{"effects":list(EFFECTS),"max_batch_items":16,"duration_seconds":[0.15,8],
+                             "intensity":[0,1],"sample_rate":48000,"format":"mono PCM_24 WAV"},
             "model_residency":"One load per job/batch; process exits and releases VRAM afterward."}
 
     @server.tool(annotations=read_only)
@@ -94,6 +98,11 @@ def create_mcp(jobs, token=None):
                                  seed: int=42, request_id: str|None=None) -> dict[str,Any]:
         """Queue CPU-only radio filtering of a local audio file up to 90 seconds; keeps a clean copy. No speech regeneration or GPU model load."""
         return await asyncio.to_thread(jobs.submit,"radio",source=source_path,preset=radio_preset,static=static_percent,seed=seed,request_id=request_id)
+
+    @server.tool(annotations=writes)
+    async def generate_sound_effects(effects: list[dict[str,Any]], request_id: str|None=None) -> dict[str,Any]:
+        """Queue 1–16 procedural CPU sound effects in the shared queue. Each item: effect (explosion/laser/plasma), duration (0.15–8 seconds, default 2), intensity (0–1, default 0.7), seed (0–2147483647, default 42). Returns job_id; get_audio_job returns individual mono 48 kHz 24-bit WAV paths and a batch ZIP. No GPU or speech model; whole batch deadline 300 seconds. Listen before claiming quality."""
+        return await asyncio.to_thread(jobs.submit,"sfx",effects=effects,request_id=request_id)
 
     @server.tool(annotations=read_only)
     async def get_audio_job(job_id: str, wait_seconds: float=0) -> dict[str,Any]:

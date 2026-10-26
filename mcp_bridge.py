@@ -25,7 +25,7 @@ async def main():
                         raise RuntimeError("Unexpected response from local audio service.")
                     return result
 
-                server = Server("local-audio-studio",version="1.0.0",instructions=info.instructions,
+                server = Server("local-audio-studio",version="1.1.0",instructions=info.instructions,
                     on_list_tools=list_tools,on_call_tool=call_tool)
                 async with stdio_server() as (reader,writer):
                     await server.run(reader,writer,server.create_initialization_options())

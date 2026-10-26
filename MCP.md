@@ -41,6 +41,11 @@ reconnect MCP before the next agent session.
 
 ## Tools
 
+MCP version 1.1.0 adds `generate_sound_effects`. The existing client registration
+and stdio bridge expose it without a configuration change. If an already-open
+client caches its tool list, reconnect that audio MCP connection after starting
+the updated studio.
+
 | Tool | Purpose |
 | --- | --- |
 | `audio_service_status` | Queue capacity, limits, tone and radio options; no model load. |
@@ -49,6 +54,7 @@ reconnect MCP before the next agent session.
 | `generate_speech_batch` | Submit up to 8 lines with one voice/model load. |
 | `convert_voice` | Convert an existing local recording using a target reference. |
 | `apply_radio_effect` | CPU-only processing of existing audio; no speech regeneration. |
+| `generate_sound_effects` | CPU batch of 1–16 explosions, lasers or plasma weapons; individual WAVs and ZIP. |
 | `get_audio_job` | Status, measurements and absolute paths/file URIs for results. |
 | `cancel_audio_job` | Cancel only the named queued/running job; preserve its files. |
 
@@ -96,11 +102,36 @@ Example batch arguments:
 
 ## Limits and lifetime
 
+Sound-effects example arguments for `generate_sound_effects`:
+
+```json
+{
+  "effects": [
+    {"effect": "explosion", "duration": 3.0, "intensity": 0.9, "seed": 42},
+    {"effect": "laser", "duration": 0.8, "intensity": 0.6, "seed": 43},
+    {"effect": "plasma", "duration": 2.0, "intensity": 0.8, "seed": 44}
+  ],
+  "request_id": "your-unique-sfx-request-id"
+}
+```
+
+Wait with `get_audio_job`, then use the returned `sfx-NNN-effect.wav` paths or
+`sound-effects.zip`. Each file is mono 48 kHz, 24-bit PCM WAV. The ZIP includes
+the WAVs, request settings and result metadata. The effects are original
+procedural synthesis, independent of Chatterbox and voice references; no extra
+model, source recordings, GPU work or cloud service is involved. Seeded variation
+is repeatable within this implementation/environment. Quality requires listening.
+
 - One queue for browser and MCP requests; at most four outstanding jobs, including
   the active job. Excess submissions fail clearly instead of building a backlog.
 - One GPU worker at a time, protected across project processes by a file lock.
   A worker gets a 300-second deadline for its entire job, including a whole batch.
   It exits after completion, failure or cancellation, releasing GPU memory.
+- Sound-effects batches use the same queue and a 300-second deadline. Each batch
+  has 1–16 items; each item has `effect` (`explosion`, `laser`, `plasma`), `duration`
+  (0.15–8 seconds, default 2), `intensity` (0–1, default 0.7), and `seed`
+  (0–2147483647, default 42). Cancellation is checked between synthesis, writing
+  and packaging steps; an individual bounded synthesis finishes before stopping.
 - Each TTS line has at most 300 spoken characters; batches have 1–8 lines and
   at most 1200 input characters total. Leading supported stage directions behave
   the same as in the browser. Quality still needs listening.
